@@ -59,7 +59,7 @@ export class CompanyService {
           principal_contacts: this.cleanArrayValues([company.principal_contact]),
           urls: this.cleanArrayValues([company.url]),
           addresses: this.cleanArrayValues([company.address]),
-          accreditation: company.accreditation === 'Unknown' ? null : company.accreditation,
+          accreditation: company.accreditation === 'Unknown' ? undefined : company.accreditation,
           source_url: metadata.sourceUrl,
           page_count: metadata.pageCount,
         };
@@ -179,7 +179,7 @@ export class CompanyService {
   /**
    * Clean array values by removing null, undefined, empty, and 'N/A' values
    */
-  private static cleanArrayValues(values: (string | null | undefined)[]): string[] | null {
+  private static cleanArrayValues(values: (string | null | undefined)[]): string[] | undefined {
     const cleaned = values
       .filter(v => v && v !== 'N/A' && v.trim() !== '')
       .map(v => v!.trim());
@@ -187,7 +187,7 @@ export class CompanyService {
     // Remove duplicates
     const unique = [...new Set(cleaned)];
     
-    return unique.length > 0 ? unique : null;
+    return unique.length > 0 ? unique : undefined;
   }
 
   /**
@@ -239,11 +239,11 @@ export class CompanyService {
 
     // Update with new data
     const updateData: Partial<CompanyInsert> = {
-      phones: newPhones,
-      principal_contacts: newPrincipalContacts,
-      urls: newUrls,
-      addresses: newAddresses,
-      accreditation: newData.accreditation === 'Unknown' ? existing.accreditation : newData.accreditation,
+      phones: newPhones || undefined,
+      principal_contacts: newPrincipalContacts || undefined,
+      urls: newUrls || undefined,
+      addresses: newAddresses || undefined,
+      accreditation: newData.accreditation === 'Unknown' ? existing.accreditation || undefined : newData.accreditation,
       source_url: metadata.sourceUrl,
       page_count: metadata.pageCount,
     };
@@ -623,86 +623,6 @@ If all new values are duplicates, return: []`;
     return null;
   }
 
-  /**
-   * Update existing company with new information
-   */
-  private static async updateExistingCompany(
-    existing: Company, 
-    newData: CompanyData, 
-    metadata: ScrapingMetadata
-  ): Promise<Company | null> {
-    // Check if there's actually new information to update
-    const hasNewInfo = this.hasNewInformation(existing, newData);
-    
-    if (!hasNewInfo) {
-      console.log(`No new information for ${existing.name}, skipping update`);
-      return null;
-    }
-
-    // Prepare update data with new information
-    const updateData: Partial<CompanyInsert> = {
-      // Update fields if new data is better (not null/N/A and different)
-      phone: this.getBetterValue(existing.phone, newData.phone),
-      principal_contact: this.getBetterValue(existing.principal_contact, newData.principal_contact),
-      address: this.getBetterValue(existing.address, newData.address),
-      accreditation: this.getBetterValue(existing.accreditation, newData.accreditation),
-      url: this.getBetterValue(existing.url, newData.url),
-      // Update metadata
-      source_url: metadata.sourceUrl,
-      page_count: metadata.pageCount,
-      scraped_at: new Date().toISOString(),
-    };
-
-    const { data, error } = await supabase
-      .from('companies')
-      .update(updateData)
-      .eq('id', existing.id)
-      .select()
-      .single();
-
-    if (error) {
-      console.error(`Error updating company ${existing.name}:`, error);
-      throw error;
-    }
-
-    console.log(`Updated company ${existing.name} with new information`);
-    return data;
-  }
-
-  /**
-   * Check if new data has information worth updating
-   */
-  private static hasNewInformation(existing: Company, newData: CompanyData): boolean {
-    return (
-      this.getBetterValue(existing.phone, newData.phone) !== existing.phone ||
-      this.getBetterValue(existing.principal_contact, newData.principal_contact) !== existing.principal_contact ||
-      this.getBetterValue(existing.address, newData.address) !== existing.address ||
-      this.getBetterValue(existing.accreditation, newData.accreditation) !== existing.accreditation ||
-      this.getBetterValue(existing.url, newData.url) !== existing.url
-    );
-  }
-
-  /**
-   * Get better value between existing and new data
-   */
-  private static getBetterValue(existingValue: string | null, newValue: string): string | null {
-    // If existing value is null/empty and new value has content, use new value
-    if (!existingValue && newValue && newValue !== 'N/A') {
-      return newValue;
-    }
-    
-    // If existing value exists and new value is N/A, keep existing
-    if (existingValue && (newValue === 'N/A' || !newValue)) {
-      return existingValue;
-    }
-    
-    // If both have values, prefer the longer/more detailed one
-    if (existingValue && newValue && newValue !== 'N/A') {
-      return newValue.length > existingValue.length ? newValue : existingValue;
-    }
-    
-    return existingValue;
-  }
 
   /**
    * Check if companies with similar names already exist (legacy method)

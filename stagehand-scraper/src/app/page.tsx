@@ -77,7 +77,7 @@ export default function Home() {
   const [progressStatus, setProgressStatus] = useState('');
   const [progressPercent, setProgressPercent] = useState(0);
   const [activeTab, setActiveTab] = useState<'scraper' | 'database'>('scraper');
-  const [saveToDatabase, setSaveToDatabase] = useState(true);
+  const [saveToDatabase] = useState(true);
   const [databaseCompanies, setDatabaseCompanies] = useState<DatabaseCompany[]>([]);
   const [databaseStats, setDatabaseStats] = useState<{
     totalCompanies: number;
@@ -94,7 +94,7 @@ export default function Home() {
 
     // Simulate progress updates based on typical scraping flow
     const simulateProgress = () => {
-      const phases = [];
+      const phases: { status: string; percent: number; duration: number }[] = [];
       
       // Add initialization
       phases.push({ status: 'Initializing scraper...', percent: 0, duration: 2000 });
@@ -418,14 +418,14 @@ export default function Home() {
                     )}
                   </div>
                   
-                  {result.savedToDatabase && (result.duplicatesSkipped > 0 || result.duplicatesUpdated > 0) && (
+                  {result.savedToDatabase && ((result.duplicatesSkipped || 0) > 0 || (result.duplicatesUpdated || 0) > 0) && (
                     <div className="flex flex-wrap gap-3 text-sm">
-                      {result.duplicatesSkipped > 0 && (
+                      {(result.duplicatesSkipped || 0) > 0 && (
                         <span className="px-3 py-1 bg-amber-100 text-amber-700 rounded-full">
                           {result.duplicatesSkipped} already existed (skipped)
                         </span>
                       )}
-                      {result.duplicatesUpdated > 0 && (
+                      {(result.duplicatesUpdated || 0) > 0 && (
                         <span className="px-3 py-1 bg-blue-100 text-blue-700 rounded-full">
                           {result.duplicatesUpdated} existing companies updated
                         </span>

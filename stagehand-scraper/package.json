@@ -14,9 +14,12 @@
   "dependencies": {
     "@browserbasehq/stagehand": "^2.4.1",
     "@supabase/supabase-js": "^2.51.0",
+    "dotenv": "^16.4.5",
     "next": "15.4.1",
     "react": "19.1.0",
-    "react-dom": "19.1.0"
+    "react-dom": "19.1.0",
+    "ws": "^8.18.3",
+    "zod": "^3.23.8"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3",

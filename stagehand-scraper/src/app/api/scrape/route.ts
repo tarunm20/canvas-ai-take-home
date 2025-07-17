@@ -62,7 +62,7 @@ export async function POST(request: NextRequest) {
 
     // Save to database if requested and get consolidated data
     let saveResult: SaveResult | null = null;
-    let consolidatedData: any[] = result.data || [];
+    let consolidatedData: Record<string, unknown>[] = result.data || [];
     
     if (saveToDatabase && result.data && result.data.length > 0) {
       try {
