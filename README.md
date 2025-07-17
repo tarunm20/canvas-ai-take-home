@@ -76,6 +76,26 @@ npm run dev
 2. **Web app**: `cd stagehand-scraper && npm run dev`
 3. **Browse to**: http://localhost:3000
 
+## Running Tests
+
+### Python Scraper Tests
+```bash
+cd scraper
+pip install -r tests/requirements.txt
+python -m pytest tests/ -v
+```
+
+### Stagehand Scraper Tests
+```bash
+cd stagehand-scraper
+npm install
+npm test
+```
+
+**Test Coverage:**
+- **Python**: Duplicate detection, phone formatting, data merging
+- **Stagehand**: API endpoints, data extraction, database integration
+
 ## Stagehand Scraper API
 
 ### POST /api/scrape
