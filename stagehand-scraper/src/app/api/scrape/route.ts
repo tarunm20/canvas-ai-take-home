@@ -1,11 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { PhaseBScraper } from '@/lib/phase-b-scraper';
+import { CompanyService, type SaveResult } from '@/lib/company-service';
 
 interface ScrapeRequestBody {
   targetUrl?: string;
   maxPages?: number;
   format?: 'json' | 'csv';
   extractionInstructions?: string;
+  saveToDatabase?: boolean;
 }
 
 export async function POST(request: NextRequest) {
@@ -15,7 +17,8 @@ export async function POST(request: NextRequest) {
       targetUrl, 
       maxPages = 1, 
       format = 'json',
-      extractionInstructions 
+      extractionInstructions,
+      saveToDatabase = true 
     } = body;
 
     console.log('Starting Phase B Stagehand scraper with params:', { targetUrl, maxPages, format, hasCustomInstructions: !!extractionInstructions });
@@ -57,6 +60,44 @@ export async function POST(request: NextRequest) {
 
     console.log(`Scraper succeeded: ${result.totalCompanies} companies found`);
 
+    // Save to database if requested and get consolidated data
+    let saveResult: SaveResult | null = null;
+    let consolidatedData: any[] = result.data || [];
+    
+    if (saveToDatabase && result.data && result.data.length > 0) {
+      try {
+        const metadata = {
+          sourceUrl: result.metadata?.targetUrl || targetUrl || 'Unknown',
+          pageCount: result.metadata?.maxPages || maxPages,
+          totalCompanies: result.totalCompanies || 0,
+          executionTime: result.executionTime || 0,
+        };
+
+        console.log('Saving companies to database with duplicate prevention...');
+        saveResult = await CompanyService.saveCompanies(result.data, metadata);
+        console.log(`Database save result: ${saveResult.savedCompanies.length} saved, ${saveResult.duplicatesSkipped} skipped, ${saveResult.duplicatesUpdated} updated`);
+        
+        // Get the database records for companies from the current scrape session only
+        const scrapedCompanyNames = result.data.map(c => c.name);
+        const { companies: currentSessionCompanies } = await CompanyService.getCompaniesByNames(scrapedCompanyNames);
+        
+        // Convert database companies from current session to frontend format for display
+        consolidatedData = currentSessionCompanies.map(company => ({
+          name: company.name,
+          phone: company.phones?.[0] || 'N/A',
+          principal_contact: company.principal_contacts?.[0] || 'N/A',
+          url: company.urls?.[0] || 'N/A',
+          address: company.addresses?.[0] || 'N/A',
+          accreditation: company.accreditation || 'Unknown'
+        }));
+        
+        console.log(`Returning ${consolidatedData.length} database records from current scrape session`);
+      } catch (dbError) {
+        console.error('Database save failed:', dbError);
+        // Continue without failing the entire request
+      }
+    }
+
     // Handle CSV format response
     if (format === 'csv') {
       const csvContent = jsonToCsv(result.data || []);
@@ -69,12 +110,18 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // Return JSON response
+    // Return JSON response with consolidated data
     return NextResponse.json({
       success: true,
-      data: result.data,
-      totalCompanies: result.totalCompanies,
+      data: consolidatedData,
+      totalCompanies: consolidatedData.length,
+      originalTotalCompanies: result.totalCompanies,
       executionTime: result.executionTime,
+      savedToDatabase: !!saveResult,
+      savedCount: saveResult?.savedCompanies.length || 0,
+      duplicatesSkipped: saveResult?.duplicatesSkipped || 0,
+      duplicatesUpdated: saveResult?.duplicatesUpdated || 0,
+      totalProcessed: saveResult?.totalProcessed || 0,
       metadata: {
         ...result.metadata,
         format,

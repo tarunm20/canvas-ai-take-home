@@ -23,7 +23,6 @@ export class MinimalStagehandScraper {
       modelClientOptions: {
         apiKey: process.env.OPENAI_API_KEY,
       },
-      headless: true,
     });
   }
 
@@ -56,11 +55,11 @@ export class MinimalStagehandScraper {
           companyData = JSON.parse(basicInfo);
         } else if (basicInfo && typeof basicInfo === 'object' && 'extraction' in basicInfo) {
           // Handle nested extraction property
-          companyData = JSON.parse((basicInfo as any).extraction);
+          companyData = JSON.parse((basicInfo as { extraction: string }).extraction);
         } else {
           companyData = basicInfo as Partial<CompanyData>;
         }
-      } catch (parseError) {
+      } catch {
         console.log('Failed to parse basic info, using raw data:', basicInfo);
         companyData = { name: 'Parse Error', phone: 'N/A', accreditation: 'Unknown' };
       }
@@ -91,7 +90,7 @@ export class MinimalStagehandScraper {
         try {
           const linkUrl = await page.extract({
             instruction: `Find the first company's profile link (usually the company name in blue text with class "text-blue-medium"). Return just the URL/href value, not JSON.`
-          });
+          }) as unknown as string;
           
           console.log('Extracted link URL:', linkUrl);
           if (linkUrl && typeof linkUrl === 'string' && linkUrl.includes('bbb.org')) {
@@ -129,11 +128,11 @@ export class MinimalStagehandScraper {
             profileData = JSON.parse(detailedInfo);
           } else if (detailedInfo && typeof detailedInfo === 'object' && 'extraction' in detailedInfo) {
             // Handle nested extraction property
-            profileData = JSON.parse((detailedInfo as any).extraction);
+            profileData = JSON.parse((detailedInfo as { extraction: string }).extraction);
           } else {
             profileData = detailedInfo as Partial<CompanyData>;
           }
-        } catch (parseError) {
+        } catch {
           console.log('Failed to parse detailed info, using raw data:', detailedInfo);
           profileData = { principal_contact: 'Parse Error', address: 'Parse Error' };
         }

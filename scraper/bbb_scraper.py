@@ -19,6 +19,9 @@ class BBBScraper:
         self.companies = []
         self.seen_companies = set()
         self.max_pages = 15
+        # Enhanced duplicate detection stats
+        self.duplicates_detected = 0
+        self.companies_merged = 0
         
     async def scrape_page(self, page, page_num):
         """Scrape a single page of BBB search results"""
@@ -49,9 +52,16 @@ class BBBScraper:
                             if enhanced_data:
                                 company_data = enhanced_data
                             
-                            self.companies.append(company_data)
-                            self.seen_companies.add(company_data['name'])
-                            logger.info(f"Added: {company_data['name']}")
+                            # Check if we should merge with similar existing company
+                            merged_company = self.merge_with_existing_company(company_data)
+                            if merged_company:
+                                # Update existing company instead of adding new one
+                                logger.info(f"Merged data into existing company: {merged_company['name']}")
+                            else:
+                                # Add as new company
+                                self.companies.append(company_data)
+                                self.seen_companies.add(company_data['name'])
+                                logger.info(f"Added: {company_data['name']}")
                     except Exception as e:
                         logger.error(f"Error processing result: {e}")
                         continue
@@ -307,8 +317,141 @@ class BBBScraper:
         return f"+{digits}"
         
     def is_unique_company(self, company_data: Dict) -> bool:
-        """Check if company is unique to avoid duplicates"""
-        return company_data['name'] not in self.seen_companies
+        """Check if company is unique to avoid duplicates with enhanced detection"""
+        company_name = company_data['name']
+        
+        # Original exact match check (preserves take-home requirement)
+        if company_name in self.seen_companies:
+            return False
+            
+        # Enhanced duplicate detection (additional feature)
+        normalized_name = self.normalize_company_name(company_name)
+        
+        # Check against normalized versions of existing companies
+        for existing_name in self.seen_companies:
+            if self.normalize_company_name(existing_name) == normalized_name:
+                logger.info(f"Duplicate detected: '{company_name}' similar to existing '{existing_name}'")
+                self.duplicates_detected += 1
+                return False
+                
+        return True
+    
+    def normalize_company_name(self, name: str) -> str:
+        """Normalize company name for better duplicate detection"""
+        # Convert to lowercase and remove extra spaces
+        normalized = name.lower().strip()
+        
+        # Remove common business suffixes that might vary
+        suffixes = [' llc', ' inc', ' corp', ' corporation', ' ltd', ' limited', 
+                   ', llc', ', inc', ', corp', ', ltd']
+        for suffix in suffixes:
+            if normalized.endswith(suffix):
+                normalized = normalized[:-len(suffix)].strip()
+                
+        # Remove punctuation and extra spaces
+        normalized = re.sub(r'[^\w\s]', '', normalized)
+        normalized = re.sub(r'\s+', ' ', normalized).strip()
+        
+        return normalized
+    
+    def merge_with_existing_company(self, new_company: Dict) -> Dict:
+        """Merge new company data with existing similar company (preserves CSV format)"""
+        new_name_normalized = self.normalize_company_name(new_company['name'])
+        
+        # Find existing company with similar normalized name
+        for i, existing_company in enumerate(self.companies):
+            if self.normalize_company_name(existing_company['name']) == new_name_normalized:
+                # Merge data while preserving CSV single-value format
+                merged = existing_company.copy()
+                
+                # Merge phone (consolidate multiple values)
+                merged['phone'] = self.merge_field_values(
+                    existing_company.get('phone', 'N/A'), 
+                    new_company.get('phone', 'N/A')
+                )
+                
+                # Merge principal_contact (consolidate multiple values)
+                merged['principal_contact'] = self.merge_field_values(
+                    existing_company.get('principal_contact', 'N/A'), 
+                    new_company.get('principal_contact', 'N/A')
+                )
+                
+                # Merge address (consolidate multiple different addresses)
+                merged['address'] = self.merge_field_values(
+                    existing_company.get('address', 'N/A'), 
+                    new_company.get('address', 'N/A')
+                )
+                
+                # Merge URL (consolidate multiple values)
+                merged['url'] = self.merge_field_values(
+                    existing_company.get('url', 'N/A'), 
+                    new_company.get('url', 'N/A')
+                )
+                
+                # Merge accreditation (prefer 'Accredited' over others)
+                new_accreditation = new_company.get('accreditation', 'Unknown')
+                if new_accreditation == 'Accredited' or existing_company.get('accreditation', 'Unknown') == 'Unknown':
+                    merged['accreditation'] = new_accreditation
+                
+                # Update the existing company in place
+                self.companies[i] = merged
+                self.companies_merged += 1
+                logger.info(f"Enhanced existing company: {merged['name']}")
+                return merged
+                
+        return None
+    
+    def merge_field_values(self, existing_value: str, new_value: str) -> str:
+        """Merge field values, combining different non-duplicate information"""
+        # Handle N/A values
+        if existing_value in ['N/A', '', None]:
+            return new_value if new_value not in ['N/A', '', None] else 'N/A'
+        if new_value in ['N/A', '', None]:
+            return existing_value
+            
+        # If values are identical, return as-is
+        if existing_value == new_value:
+            return existing_value
+            
+        # Check if values are similar but not identical
+        if self.are_values_similar(existing_value, new_value):
+            # Return the more complete/longer value
+            return existing_value if len(existing_value) >= len(new_value) else new_value
+            
+        # Values are different - combine them with pipe separator
+        # Split existing value in case it already contains multiple values
+        existing_parts = existing_value.split('|') if '|' in existing_value else [existing_value]
+        
+        # Check if new value is already in existing parts
+        for part in existing_parts:
+            if self.are_values_similar(part.strip(), new_value):
+                return existing_value  # Already have this info
+                
+        # Add new value
+        return f"{existing_value}|{new_value}"
+    
+    def are_values_similar(self, value1: str, value2: str) -> bool:
+        """Check if two values are similar enough to be considered duplicates"""
+        if not value1 or not value2:
+            return False
+            
+        # Normalize for comparison
+        norm1 = re.sub(r'[^\w\s]', '', value1.lower().strip())
+        norm2 = re.sub(r'[^\w\s]', '', value2.lower().strip())
+        
+        # Handle contact names - remove titles and suffixes
+        if '(' in value1 and '(' in value2:  # Both look like contacts with titles
+            # Extract base names
+            name1 = value1.split('(')[0].strip()
+            name2 = value2.split('(')[0].strip()
+            # Remove common prefixes
+            for prefix in ['Mr.', 'Mrs.', 'Ms.', 'Dr.', 'Miss']:
+                name1 = re.sub(f'^{prefix}\\s+', '', name1, flags=re.IGNORECASE)
+                name2 = re.sub(f'^{prefix}\\s+', '', name2, flags=re.IGNORECASE)
+            return name1.strip().lower() == name2.strip().lower()
+            
+        # For other values, check if they're substantially similar
+        return norm1 == norm2 or (len(norm1) > 5 and norm1 in norm2) or (len(norm2) > 5 and norm2 in norm1)
         
     async def scrape_all_pages(self):
         """Scrape all pages from 1 to max_pages"""
@@ -334,6 +477,13 @@ class BBBScraper:
         df = pd.DataFrame(self.companies)
         df.to_csv(filename, index=False)
         logger.info(f"Exported {len(self.companies)} companies to {filename}")
+        
+        # Log enhancement statistics
+        if self.duplicates_detected > 0 or self.companies_merged > 0:
+            logger.info(f"Enhanced Duplicate Detection Stats:")
+            logger.info(f"  - Duplicates detected and skipped: {self.duplicates_detected}")
+            logger.info(f"  - Companies enhanced through merging: {self.companies_merged}")
+            logger.info(f"  - Final unique companies: {len(self.companies)}")
         
     async def collect_all_urls_and_basic_data(self) -> List[Tuple[Dict, str]]:
         """Phase 1: Collect all URLs and basic data from search pages"""

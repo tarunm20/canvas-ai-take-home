@@ -7,12 +7,14 @@ export interface CompanyData {
   url: string;
   address: string;
   accreditation: string;
+  [key: string]: string;
 }
 
 export interface StagehandScrapingOptions {
   targetUrl?: string;
   maxPages?: number;
   extractionInstructions?: string;
+  onProgress?: (status: string, progress: number) => void;
 }
 
 export interface StagehandScrapingResult {
@@ -44,7 +46,6 @@ export class PhaseBScraper {
       modelClientOptions: {
         apiKey: process.env.OPENAI_API_KEY,
       },
-      headless: true,
     });
   }
 
@@ -64,7 +65,7 @@ export class PhaseBScraper {
       }
 
       return { valid: true };
-    } catch (error) {
+    } catch {
       return { valid: false, error: 'Error validating API key configuration' };
     }
   }
@@ -74,6 +75,9 @@ export class PhaseBScraper {
     this.llmCallCount = 0;
 
     try {
+      const { onProgress } = options;
+      
+      onProgress?.('Initializing scraper...', 0);
       await this.stagehand.init();
       const page = this.stagehand.page;
 
@@ -84,6 +88,9 @@ export class PhaseBScraper {
       console.log(`Starting Phase B scraping: ${targetUrl}, ${maxPages} pages`);
 
       for (let currentPage = 1; currentPage <= maxPages; currentPage++) {
+        const pageProgress = (currentPage - 1) / maxPages * 60; // Pages take 60% of total work
+        onProgress?.(`Processing page ${currentPage} of ${maxPages}...`, pageProgress);
+        
         console.log(`Processing page ${currentPage}/${maxPages}`);
 
         const pageUrl = this.buildPageUrl(targetUrl, currentPage);
@@ -94,14 +101,17 @@ export class PhaseBScraper {
         const pageCompanies = await this.extractCompaniesFromPage(page);
         
         if (pageCompanies.length > 0) {
-          allCompanies.push(...pageCompanies);
-          console.log(`Extracted ${pageCompanies.length} companies from page ${currentPage}`);
+          // Now enhance each company with detailed information
+          const enhancedCompanies = await this.enhanceCompaniesWithDetails(page, pageCompanies, onProgress, currentPage, maxPages);
+          allCompanies.push(...enhancedCompanies);
+          console.log(`Enhanced ${enhancedCompanies.length} companies from page ${currentPage}`);
         } else {
           console.log(`No companies found on page ${currentPage}, stopping pagination`);
           break;
         }
       }
 
+      onProgress?.('Finalizing results...', 100);
       await this.stagehand.close();
 
       const executionTime = Date.now() - startTime;
@@ -139,29 +149,19 @@ export class PhaseBScraper {
     }
   }
 
-  private async extractCompaniesFromPage(page: any): Promise<CompanyData[]> {
+  private async extractCompaniesFromPage(page: { evaluate: (fn: () => unknown) => Promise<unknown> }): Promise<CompanyData[]> {
     console.log('Finding all company cards on page...');
-    
-    // First, let's get the actual count of cards to verify
-    const cardCountInstruction = `
-    Look at this BBB search results page and count how many div elements have the class "card result-card". 
-    Just return the number as a simple integer, nothing else.
-    `;
-    
-    const cardCount = await page.extract({
-      instruction: cardCountInstruction
-    });
-    this.llmCallCount++;
-    
-    console.log('Card count result:', cardCount);
-    
-    // Now extract the actual href attributes using JavaScript evaluation
-    console.log('Extracting real href attributes from DOM...');
     
     try {
       // Use page.evaluate to run actual JavaScript and get real DOM data
       const realData = await page.evaluate(() => {
-        const results = [];
+        const results: Array<{
+          name: string;
+          phone: string;
+          address: string;
+          url: string;
+          accreditation: string;
+        }> = [];
         
         // Find the main container
         const container = document.querySelector('div.stack.stack-space-20[style*="margin-block-start"]');
@@ -177,16 +177,16 @@ export class PhaseBScraper {
           try {
             // Extract company name and URL
             const nameLink = card.querySelector('a.text-blue-medium');
-            const name = nameLink ? nameLink.textContent.trim() : 'N/A';
-            const href = nameLink ? nameLink.getAttribute('href') : 'N/A';
+            const name = nameLink ? nameLink.textContent?.trim() || 'N/A' : 'N/A';
+            const href = nameLink ? nameLink.getAttribute('href') || 'N/A' : 'N/A';
             
             // Extract phone
             const phoneLink = card.querySelector('a[href^="tel:"]');
-            const phone = phoneLink ? phoneLink.textContent.trim() : 'N/A';
+            const phone = phoneLink ? phoneLink.textContent?.trim() || 'N/A' : 'N/A';
             
             // Extract address
             const addressP = card.querySelector('p.bds-body.text-size-5.text-gray-70');
-            const address = addressP ? addressP.textContent.trim() : 'N/A';
+            const address = addressP ? addressP.textContent?.trim() || 'N/A' : 'N/A';
             
             // Check for accreditation
             const accreditedImg = card.querySelector('img[alt*="Accredited Business"]');
@@ -204,26 +204,44 @@ export class PhaseBScraper {
           }
         });
         
-        return { data: results, count: cards.length };
+        return { data: results, count: cards.length } as {
+          data: Array<{
+            name: string;
+            phone: string;
+            address: string;
+            url: string;
+            accreditation: string;
+          }>;
+          count: number;
+        } | { error: string };
       });
       
       console.log('Real DOM extraction result:', realData);
       
-      if (realData.error) {
-        console.log('DOM extraction error:', realData.error);
+      const typedRealData = realData as {
+        data: Array<{
+          name: string;
+          phone: string;
+          address: string;
+          url: string;
+          accreditation: string;
+        }>;
+        count: number;
+      } | { error: string };
+      
+      if ('error' in typedRealData) {
+        console.log('DOM extraction error:', typedRealData.error);
         return [];
       }
       
-      if (!realData.data || !Array.isArray(realData.data)) {
+      if (!typedRealData.data || !Array.isArray(typedRealData.data)) {
         console.log('Invalid DOM extraction result');
         return [];
       }
       
-      console.log(`Found ${realData.count} cards, extracted ${realData.data.length} companies`);
+      console.log(`Found ${typedRealData.count} cards, extracted ${typedRealData.data.length} companies`);
       
-      const processedCompanies: CompanyData[] = realData.data.map((company: any, index: number) => {
-        console.log(`Processing company ${index + 1}:`, company);
-        
+      const processedCompanies: CompanyData[] = typedRealData.data.map((company) => {
         let processedUrl = company.url || 'N/A';
         if (processedUrl !== 'N/A' && processedUrl.startsWith('/')) {
           processedUrl = `https://www.bbb.org${processedUrl}`;
@@ -235,7 +253,7 @@ export class PhaseBScraper {
           address: company.address || 'N/A',
           url: processedUrl,
           accreditation: company.accreditation || 'Unknown',
-          principal_contact: 'N/A' // Not available from card view
+          principal_contact: 'N/A' // Will be enhanced later
         };
       });
       
@@ -243,42 +261,184 @@ export class PhaseBScraper {
       return processedCompanies;
       
     } catch (error) {
-      console.log('Error in DOM extraction, falling back to LLM extraction:', error);
+      console.log('Error in DOM extraction:', error);
+      return [];
+    }
+  }
+
+  private async enhanceCompaniesWithDetails(
+    _page: unknown, 
+    companies: CompanyData[], 
+    onProgress?: (status: string, progress: number) => void,
+    currentPage?: number,
+    maxPages?: number
+  ): Promise<CompanyData[]> {
+    console.log(`Enhancing ${companies.length} companies with detailed information using parallel processing...`);
+    
+    // Filter companies with valid URLs
+    const validCompanies = companies.filter(company => 
+      company.url && company.url !== 'N/A' && company.url.includes('bbb.org')
+    );
+    
+    const invalidCompanies = companies.filter(company => 
+      !company.url || company.url === 'N/A' || !company.url.includes('bbb.org')
+    );
+
+    console.log(`Processing ${validCompanies.length} companies with valid URLs in parallel...`);
+    console.log(`Skipping ${invalidCompanies.length} companies without valid URLs`);
+
+    // Process companies in parallel batches
+    const BATCH_SIZE = 5; // Number of concurrent Stagehand instances
+    const enhancedCompanies: CompanyData[] = [];
+    const totalBatches = Math.ceil(validCompanies.length / BATCH_SIZE);
+    
+    for (let i = 0; i < validCompanies.length; i += BATCH_SIZE) {
+      const batch = validCompanies.slice(i, i + BATCH_SIZE);
+      const batchNumber = Math.floor(i / BATCH_SIZE) + 1;
       
-      // Fallback to original LLM-based extraction if DOM extraction fails
-      const fallbackInstruction = `
-      Find all company cards on this page and extract ONLY what you actually see in the HTML.
-      Do not make up or hallucinate any URLs. Extract real href attributes from actual <a> elements.
-      Return a JSON array with name, phone, address, url, and accreditation for each company.
+      // Calculate progress: 60% for pages + 40% for enhancement
+      const baseProgress = currentPage && maxPages ? ((currentPage - 1) / maxPages * 60) : 0;
+      const enhancementProgress = (batchNumber - 1) / totalBatches * 40;
+      const totalProgress = baseProgress + enhancementProgress;
+      
+      onProgress?.(`Enhancing companies: batch ${batchNumber} of ${totalBatches}`, totalProgress);
+      console.log(`Processing batch ${batchNumber}/${totalBatches} (${batch.length} companies)`);
+      
+      // Create promises for parallel processing
+      const batchPromises = batch.map(company => 
+        this.processCompanyInParallel(company)
+      );
+      
+      // Wait for all companies in batch to complete
+      const batchResults = await Promise.allSettled(batchPromises);
+      
+      // Process results
+      batchResults.forEach((result, index) => {
+        if (result.status === 'fulfilled') {
+          enhancedCompanies.push(result.value);
+        } else {
+          console.log(`Error processing ${batch[index].name}:`, result.reason);
+          enhancedCompanies.push(batch[index]); // Add original data on failure
+        }
+      });
+      
+      // Small delay between batches to be respectful
+      if (i + BATCH_SIZE < validCompanies.length) {
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
+    }
+
+    // Add companies without valid URLs (unchanged)
+    enhancedCompanies.push(...invalidCompanies);
+
+    console.log(`Enhanced ${enhancedCompanies.length} companies total`);
+    return enhancedCompanies;
+  }
+
+  private async processCompanyInParallel(company: CompanyData): Promise<CompanyData> {
+    // Create a new Stagehand instance for this company
+    const stagehand = new Stagehand({
+      env: "LOCAL",
+      modelName: "openai/gpt-4o-mini",
+      modelClientOptions: {
+        apiKey: process.env.OPENAI_API_KEY,
+      },
+    });
+
+    try {
+      await stagehand.init();
+      const page = stagehand.page;
+
+      console.log(`Visiting profile page: ${company.url}`);
+      await page.goto(company.url);
+      await page.waitForTimeout(2000);
+
+      // Extract principal contact and enhanced address using AI
+      const detailsInstruction = `
+        You are on a BBB business profile page. Look carefully for and extract:
+
+        1. Principal Contact: Look for sections with headings like:
+           - "Principal"
+           - "Business Management"
+           - "Contact Information"
+           - "Key Personnel"
+           - "Principal Executives"
+           - "Business Owner"
+           - "Management"
+           
+           Look for names with titles like Owner, CEO, President, Manager, Principal, Director, etc.
+           The person's name might be listed under these sections or in contact information.
+           Also check if there are any names listed as contacts or representatives.
+           Format as "FirstName LastName (Title)" if title is found, or just "FirstName LastName" if no title.
+           If multiple people are listed, choose the first one or the one with the highest title.
+
+        2. Complete Address: Look for the business address section. Extract the full street address 
+           including street number, street name, city, state, and ZIP code.
+
+        Return ONLY a JSON object with this exact format:
+        {"principal_contact": "John Doe (CEO)", "address": "123 Main St, City, State 12345"}
+        
+        If information is not found, use "N/A" for that field.
+        
+        IMPORTANT: Look thoroughly through the entire page content, not just the main sections.
       `;
-      
-      const result = await page.extract({
-        instruction: fallbackInstruction
+
+      const details = await page.extract({
+        instruction: detailsInstruction
       });
       this.llmCallCount++;
-      
-      let companies: any[] = [];
+
+      let enhancedDetails: { principal_contact?: string; address?: string } = {};
       try {
-        if (typeof result === 'string') {
-          companies = JSON.parse(result);
-        } else if (result && typeof result === 'object' && 'extraction' in result) {
-          companies = JSON.parse((result as any).extraction);
-        } else if (Array.isArray(result)) {
-          companies = result;
+        console.log(`\n=== DEBUG: ${company.name} ===`);
+        console.log(`URL: ${company.url}`);
+        console.log(`Raw AI response:`, JSON.stringify(details, null, 2));
+        
+        // Handle different response formats from Stagehand
+        if (typeof details === 'string') {
+          enhancedDetails = JSON.parse(details);
+        } else if (details && typeof details === 'object') {
+          // Check if the response has an 'extraction' field (common with Stagehand)
+          if ('extraction' in details && typeof details.extraction === 'string') {
+            enhancedDetails = JSON.parse(details.extraction);
+          } else {
+            enhancedDetails = details as { principal_contact?: string; address?: string };
+          }
         }
-      } catch (parseError) {
-        console.log('Failed to parse fallback data:', parseError);
-        return [];
+        
+        console.log(`Parsed details:`, JSON.stringify(enhancedDetails, null, 2));
+      } catch (error) {
+        console.log(`❌ Failed to parse details for ${company.name}:`, error);
+        console.log(`Raw details that failed:`, details);
+        enhancedDetails = { principal_contact: 'N/A', address: company.address };
+      }
+
+      await stagehand.close();
+
+      const finalContact = enhancedDetails.principal_contact || 'N/A';
+      const finalAddress = enhancedDetails.address || company.address;
+      
+      console.log(`✅ Final result for ${company.name}:`);
+      console.log(`   principal_contact: "${finalContact}"`);
+      console.log(`   address: "${finalAddress}"`);
+      console.log(`=== END DEBUG ===\n`);
+
+      return {
+        ...company,
+        principal_contact: finalContact,
+        address: finalAddress,
+      };
+
+    } catch (error) {
+      console.log(`Error visiting profile for ${company.name}:`, error);
+      
+      try {
+        await stagehand.close();
+      } catch (closeError) {
+        console.log('Error closing Stagehand instance:', closeError);
       }
       
-      return companies.map((company: any) => ({
-        name: company.name || 'N/A',
-        phone: this.formatPhone(company.phone || 'N/A'),
-        address: company.address || 'N/A',
-        url: company.url || 'N/A',
-        accreditation: company.accreditation || 'Unknown',
-        principal_contact: 'N/A'
-      }));
+      return company; // Return original data if profile visit fails
     }
   }
 

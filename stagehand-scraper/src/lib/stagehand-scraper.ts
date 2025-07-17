@@ -43,7 +43,6 @@ export class StagehandScraper {
         apiKey: process.env.OPENAI_API_KEY,
       },
       enableCaching: false,
-      headless: true,
     });
   }
 
@@ -79,7 +78,7 @@ export class StagehandScraper {
       }
 
       return { valid: true };
-    } catch (error) {
+    } catch {
       return { valid: false, error: 'Error validating API key configuration' };
     }
   }
